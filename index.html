@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>USS Gerald R. Ford – Deployment Route (Scroll-Controlled)</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#c8c8c8; display:flex; align-items:center; justify-content:center; min-height:100vh; }
+#container { position:relative; width:1280px; height:720px; overflow:hidden; background:#c8c8c8; }
+canvas { position:absolute; top:0; left:0; }
+#label-div { position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; }
+.wp-label {
+  position:absolute;
+  color:#111;
+  font-size:12px;
+  font-family:Georgia,serif;
+  font-weight:bold;
+  letter-spacing:0.04em;
+  opacity:0;
+  white-space:nowrap;
+  text-shadow:1px 1px 0 #fff, -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff;
+  transition:opacity 0.3s ease;
+  line-height:1.5;
+}
+#title {
+  position:absolute;
+  top:28px; left:40px;
+  color:#111;
+  font-family:Georgia,serif;
+}
+#title h1 { font-size:16px; font-weight:bold; letter-spacing:0.06em; color:#111; }
+#title p  { font-size:16px; font-weight:bold; color:rgba(0,0,0,0.6); margin-top:5px; letter-spacing:0.06em; }
+#status {
+  position:absolute; top:50%; left:50%;
+  transform:translate(-50%,-50%);
+  color:rgba(0,0,0,0.4);
+  font-family:Georgia,serif;
+  font-size:14px;
+}
+/* Demo scroll control - remove this in Vev */
+#demo-controls {
+  position:absolute;
+  bottom:28px; left:50%;
+  transform:translateX(-50%);
+  background:rgba(255,255,255,0.9);
+  padding:15px 20px;
+  border-radius:8px;
+  font-family:Georgia,serif;
+}
+#progress-slider {
+  width:300px;
+  margin-top:8px;
+}
+#progress-value {
+  display:inline-block;
+  min-width:35px;
+  text-align:right;
+  font-weight:bold;
+}
+</style>
+</head>
+<body>
+<div id="container">
+  <canvas id="map-canvas" width="1280" height="720"></canvas>
+  <canvas id="route-canvas" width="1280" height="720"></canvas>
+  <div id="label-div"></div>
+  <div id="title">
+    <h1>USS Gerald R. Ford (CVN-78)</h1>
+    <p>June 24, 2025 &ndash; May 16, 2026</p>
+  </div>
+  
+  <!-- DEMO CONTROLS - Remove this section when embedding in Vev -->
+  <div id="demo-controls">
+    <div>Scroll Progress: <span id="progress-value">0</span>%</div>
+    <input type="range" id="progress-slider" min="0" max="100" value="0">
+  </div>
+  
+  <div id="status">Loading map&hellip;</div>
+</div>
+
+<script>
+(function() {
+
+var ROUTE_COLOR = '#B9162A';
+var DOT_COLOR   = '#B9162A';
+var DOT_STROKE  = '#ffffff';
+
+var WAYPOINTS = [
+  { label:"Norfolk, Va.",        lat:36.9,  lon:-76.3,  anchor:"right" },
+  { label:"",                    lat:40.0,  lon:-45.0,  anchor:"" },
+  { label:"Strait of Gibraltar", lat:35.95, lon:-5.6,   anchor:"above" },
+  { label:"Mediterranean Sea",   lat:36.5,  lon:15.0,   anchor:"above" },
+  { label:"",                    lat:36.1,  lon:-6.2,   anchor:"" },
+  { label:"High North",          lat:68.0,  lon:5.0,    anchor:"right" },
+  { label:"",                    lat:50.5,  lon:1.0,    anchor:"" },
+  { label:"Palma de Mallorca",   lat:39.6,  lon:2.6,    anchor:"below" },
+  { label:"",                    lat:35.8,  lon:-5.9,   anchor:"" },
+  { label:"Cape Verde",          lat:15.5,  lon:-23.5,  anchor:"left" },
+  { label:"",                    lat:11.5,  lon:-28.0,  anchor:"" },
+  { label:"Caribbean Sea",       lat:17.5,  lon:-65.0,  anchor:"above" },
+  { label:"",                    lat:28.0,  lon:-40.0,  anchor:"" },
+  { label:"",                    lat:35.95, lon:-5.4,   anchor:"" },
+  { label:"Suez Canal",          lat:30.7,  lon:32.3,   anchor:"right" },
+  { label:"Red Sea",             lat:26.2,  lon:37.2,   anchor:"right" },
+  { label:"Souda Bay, Crete",    lat:35.5,  lon:24.1,   anchor:"above" },
+  { label:"Split, Croatia",      lat:43.5,  lon:16.4,   anchor:"right" },
+  { label:"",                    lat:34.5,  lon:27.0,   anchor:"" },
+  { label:"Red Sea",             lat:22.0,  lon:38.5,   anchor:"right" },
+  { label:"",                    lat:36.0,  lon:18.0,   anchor:"" },
+  { label:"",                    lat:36.0,  lon:-7.5,   anchor:"" },
+  { label:"Norfolk, Va.",        lat:36.9,  lon:-76.0,  anchor:"right" }
+];
+
+var W = 1280, H = 720;
+
+// Global progress variable - this is what you'll update from Vev
+var currentProgress = 0;
+
+function loadScript(src, cb) {
+  var s = document.createElement('script');
+  s.src = src;
+  s.onload = cb;
+  s.onerror = function() {
+    document.getElementById('status').textContent = 'Failed to load: ' + src;
+  };
+  document.head.appendChild(s);
+}
+
+loadScript(
+  'https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js',
+  function() {
+    loadScript(
+      'https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js',
+      function() { start(); }
+    );
+  }
+);
+
+function start() {
+  var projection = d3.geoNaturalEarth1()
+    .rotate([-15, 0])
+    .scale(185)
+    .translate([W/2, H/2 + 20]);
+
+  var projected = WAYPOINTS.map(function(w) {
+    var pt = projection([w.lon, w.lat]);
+    return { label:w.label, anchor:w.anchor, x:pt[0], y:pt[1] };
+  });
+
+  var mapCanvas  = document.getElementById('map-canvas');
+  var mCtx       = mapCanvas.getContext('2d');
+  var routeCanvas = document.getElementById('route-canvas');
+  var labelDiv   = document.getElementById('label-div');
+  var statusEl   = document.getElementById('status');
+
+  var labelEls = [];
+  projected.forEach(function(wp, i) {
+    if (!wp.label) return;
+    var el = document.createElement('div');
+    el.className = 'wp-label';
+    var ox = 0, oy = 0;
+    if (wp.anchor === 'right')  { ox = 10;  oy = -6; }
+    if (wp.anchor === 'left')   { ox = -10; oy = -6; el.style.transform = 'translateX(-100%)'; }
+    if (wp.anchor === 'above')  { ox = 0;   oy = -22; el.style.transform = 'translateX(-50%)'; }
+    if (wp.anchor === 'below')  { ox = 0;   oy = 14;  el.style.transform = 'translateX(-50%)'; }
+    el.style.left = (wp.x + ox) + 'px';
+    el.style.top  = (wp.y + oy) + 'px';
+    el.textContent = wp.label;
+    labelDiv.appendChild(el);
+    labelEls.push({ el:el, index:i });
+  });
+
+  var pathGen = d3.geoPath(projection, mCtx);
+
+  fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json')
+    .then(function(r) { return r.json(); })
+    .then(function(world) {
+      statusEl.style.display = 'none';
+
+      mCtx.fillStyle = '#c8c8c8';
+      mCtx.fillRect(0, 0, W, H);
+
+      var countries = topojson.feature(world, world.objects.countries);
+      mCtx.beginPath();
+      pathGen(countries);
+      mCtx.fillStyle = '#ffffff';
+      mCtx.fill();
+      mCtx.strokeStyle = '#aaaaaa';
+      mCtx.lineWidth = 0.5;
+      mCtx.stroke();
+
+      // Initial draw
+      redraw(0);
+      
+      // Demo scroll simulation - remove this in Vev
+      setupDemoControls();
+    })
+    .catch(function(e) {
+      statusEl.textContent = 'Map data failed to load. Check your internet connection.';
+    });
+
+  // This function updates the map based on progress (0 to 1)
+  function redraw(t) {
+    var rCtx = routeCanvas.getContext('2d');
+    rCtx.clearRect(0, 0, W, H);
+    var segments = projected.length - 1;
+    var total = t * segments;
+    var full  = Math.floor(total);
+    var frac  = total - full;
+
+    rCtx.lineJoin = 'round';
+    rCtx.lineCap  = 'round';
+    rCtx.strokeStyle = ROUTE_COLOR;
+    rCtx.lineWidth = 2;
+    rCtx.setLineDash([6, 4]);
+
+    for (var i = 0; i < full && i < segments; i++) {
+      rCtx.beginPath();
+      rCtx.moveTo(projected[i].x, projected[i].y);
+      rCtx.lineTo(projected[i+1].x, projected[i+1].y);
+      rCtx.stroke();
+      drawArrow(rCtx, projected[i], projected[i+1], 1.0);
+    }
+
+    if (full < segments) {
+      var a = projected[full], b = projected[full+1];
+      var ex = a.x + (b.x - a.x) * frac;
+      var ey = a.y + (b.y - a.y) * frac;
+      rCtx.beginPath();
+      rCtx.moveTo(a.x, a.y);
+      rCtx.lineTo(ex, ey);
+      rCtx.stroke();
+      if (frac > 0.4) drawArrow(rCtx, a, { x:ex, y:ey }, frac);
+    }
+
+    rCtx.setLineDash([]);
+    for (var j = 0; j <= Math.min(full, segments); j++) {
+      var wp  = projected[j];
+      var big = (j === 0 || j === segments);
+      rCtx.beginPath();
+      rCtx.arc(wp.x, wp.y, big ? 5.5 : 4, 0, Math.PI*2);
+      rCtx.fillStyle = DOT_COLOR;
+      rCtx.fill();
+      rCtx.strokeStyle = DOT_STROKE;
+      rCtx.lineWidth = 1.5;
+      rCtx.stroke();
+    }
+
+    var lastReached = -1;
+    labelEls.forEach(function(obj) {
+      if (obj.index <= full) lastReached = obj.index;
+    });
+    labelEls.forEach(function(obj) {
+      obj.el.style.opacity = (obj.index === lastReached) ? '1' : '0';
+    });
+  }
+
+  function drawArrow(ctx, a, b, alpha) {
+    var dx = b.x - a.x, dy = b.y - a.y;
+    var len = Math.sqrt(dx*dx + dy*dy);
+    if (len < 14) return;
+    var ux = dx/len, uy = dy/len;
+    var mx = (a.x+b.x)/2, my = (a.y+b.y)/2;
+    var s = 6;
+    ctx.save();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = ROUTE_COLOR;
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(mx + ux*s - uy*s*0.5, my + uy*s + ux*s*0.5);
+    ctx.lineTo(mx + ux*s,            my + uy*s           );
+    ctx.lineTo(mx + ux*s + uy*s*0.5, my + uy*s - ux*s*0.5);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  // PUBLIC API - Call this from Vev to update the map
+  window.updateMapProgress = function(progress) {
+    // progress should be between 0 (start) and 1 (end)
+    currentProgress = Math.max(0, Math.min(1, progress));
+    redraw(currentProgress);
+  };
+
+  // Demo controls - remove this function when embedding in Vev
+  function setupDemoControls() {
+    var slider = document.getElementById('progress-slider');
+    var valueDisplay = document.getElementById('progress-value');
+    
+    slider.addEventListener('input', function() {
+      var progress = parseInt(slider.value) / 100;
+      window.updateMapProgress(progress);
+      valueDisplay.textContent = slider.value;
+    });
+  }
+}
+
+})();
+</script>
+</body>
+</html>
